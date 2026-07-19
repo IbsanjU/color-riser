@@ -141,6 +141,14 @@
   .footer a:hover { color: var(--text); border-color: var(--stroke-strong); }
   .footer .dot { opacity:.4; margin:0 6px; }
 
+  .awake-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:16px; }
+  .awake-row > .lbl { font-size:0.7rem; color: var(--text-dim); font-weight:600; min-width:78px; }
+  .awake-row .chip, #awakeDock .chip { padding:0.32em 0.66em; font-size:0.68rem; }
+  .dock-awake { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .dock-awake .lbl { font-size:0.7rem; color: var(--text-dim); font-weight:600; }
+  .awake-count { font-size:0.68rem; color: var(--text-dim); font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace; margin-left:auto; }
+  .awake-count.dim { color: var(--text-faint); }
+
   .swatches { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
   .sw { width: clamp(52px, 15vw, 66px); height: clamp(52px, 15vw, 66px); border-radius: 14px; cursor:pointer;
     box-shadow: 0 6px 16px rgba(0,0,0,0.32), inset 0 0 0 1px rgba(255,255,255,0.25); transition: transform .15s ease; }
@@ -306,6 +314,10 @@
         <div class="slider"><label>Speed</label><input type="range" id="ledSpeed" min="2" max="30" value="8"></div>
         <div class="slider"><label>Brightness</label><input type="range" id="ledBright" min="15" max="100" value="100"></div>
       </div>
+      <div class="awake-row">
+        <span class="lbl">Keep awake</span>
+        <div class="chips" id="awakeLed"></div>
+      </div>
       <div class="row" style="margin-top:16px;">
         <button class="btn" id="ledStart">Start light show</button>
       </div>
@@ -344,6 +356,10 @@
         <div class="slider"><label>Treble</label><input type="range" id="gTreble" min="0" max="2.5" value="1" step="0.05"><span class="eq-val" id="gTrebleV">1.0×</span></div>
       </div>
       <div class="hint">Boost or cut each range — shapes how the visuals react. Adjustable live during the show too.</div>
+      <div class="awake-row">
+        <span class="lbl">Keep awake</span>
+        <div class="chips" id="awakeAudio"></div>
+      </div>
       <div class="row" style="margin-top:16px;">
         <button class="btn" id="audioStart" disabled style="opacity:.5;">Start show</button>
       </div>
@@ -372,6 +388,11 @@
       <div class="slider"><label>Bass</label><input type="range" id="dockBass" min="0" max="2.5" step="0.05"></div>
       <div class="slider"><label>Mid</label><input type="range" id="dockMid" min="0" max="2.5" step="0.05"></div>
       <div class="slider"><label>Treble</label><input type="range" id="dockTreble" min="0" max="2.5" step="0.05"></div>
+    </div>
+    <div class="dock-awake">
+      <span class="lbl">Keep awake</span>
+      <div class="chips" id="awakeDock"></div>
+      <span class="awake-count" id="awakeCount"></span>
     </div>
   </div>
 </div>
@@ -482,6 +503,7 @@ function openShow(type){
   document.body.style.overflow='hidden';
   sizeShowCanvas();
   syncDockChips(); revealDock();
+  refreshAwakeChips(); applyAwake();
   if(type==='led'){ showFill.classList.add('on'); showCanvas.style.display='none'; startLed(); }
   else { showFill.classList.remove('on'); showCanvas.style.display='block'; startAudioLoop(); }
   if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(()=>{});
@@ -491,9 +513,46 @@ function closeShow(){
   if(rafId)cancelAnimationFrame(rafId), rafId=null;
   if(ledTimer)clearInterval(ledTimer), ledTimer=null;
   if(audioPlayer) audioPlayer.pause();
+  if(awakeTimer){clearInterval(awakeTimer);awakeTimer=null;} releaseWakeLock(); awakeEndTs=0; updateAwakeCount();
   if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
 }
 closeBtn.onclick=closeShow;
+
+/* ============ keep-awake (screen wake lock) ============ */
+const awakeOptions=[['0','Off'],['15','15m'],['30','30m'],['60','1h'],['120','2h'],['inf','∞']];
+let awakeSel='30', wakeLock=null, awakeTimer=null, awakeEndTs=0, noSleepVideo=null;
+const labelFor=v=>awakeOptions.find(o=>o[0]===v)[1];
+
+function buildAwakeChips(container){ if(!container)return; container.innerHTML=''; awakeOptions.forEach(([val,label])=>{const c=document.createElement('button');c.className='chip'+(val===awakeSel?' active':'');c.textContent=label;c.onclick=e=>{e.stopPropagation();setAwake(val);};container.appendChild(c);}); }
+function refreshAwakeChips(){ ['awakeLed','awakeAudio','awakeDock'].forEach(id=>{const c=$(id);if(!c)return;[...c.children].forEach(ch=>ch.classList.toggle('active',ch.textContent===labelFor(awakeSel)));}); }
+function setAwake(val){ awakeSel=val; refreshAwakeChips(); if(show.classList.contains('on')) applyAwake(); if(typeof revealDock==='function' && show.classList.contains('on')) revealDock(); }
+
+async function requestWakeLock(){ try{ if('wakeLock' in navigator){ wakeLock=await navigator.wakeLock.request('screen'); return true; } }catch(e){} return false; }
+function releaseWakeLock(){ try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} fallbackWakeStop(); }
+function fallbackWakeStart(){ try{ if(!noSleepVideo){ const c=document.createElement('canvas'); c.width=c.height=2; const cx=c.getContext('2d'); cx.fillRect(0,0,2,2); const stream=c.captureStream(1); noSleepVideo=document.createElement('video'); noSleepVideo.muted=true; noSleepVideo.setAttribute('muted',''); noSleepVideo.setAttribute('playsinline',''); noSleepVideo.style.cssText='position:fixed;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none;'; noSleepVideo.srcObject=stream; document.body.appendChild(noSleepVideo); setInterval(()=>{try{cx.fillRect(0,0,2,2);}catch(e){}},1000); } noSleepVideo.play().catch(()=>{}); }catch(e){} }
+function fallbackWakeStop(){ try{ if(noSleepVideo) noSleepVideo.pause(); }catch(e){} }
+
+async function applyAwake(){
+  if(awakeTimer){clearInterval(awakeTimer);awakeTimer=null;}
+  if(awakeSel==='0'){ releaseWakeLock(); awakeEndTs=0; updateAwakeCount(); return; }
+  const ok=await requestWakeLock(); if(!ok) fallbackWakeStart();
+  awakeEndTs = awakeSel==='inf' ? Infinity : Date.now()+Number(awakeSel)*60000;
+  updateAwakeCount();
+  awakeTimer=setInterval(()=>{
+    if(awakeEndTs!==Infinity && Date.now()>=awakeEndTs){ clearInterval(awakeTimer); awakeTimer=null; releaseWakeLock(); awakeEndTs=0; updateAwakeCount(true); }
+    else updateAwakeCount();
+  },1000);
+}
+function updateAwakeCount(expired){
+  const el=$('awakeCount'); if(!el)return;
+  if(awakeSel==='0'){ el.textContent='sleep allowed'; el.classList.add('dim'); return; }
+  if(expired){ el.textContent='timer ended · may sleep'; el.classList.add('dim'); return; }
+  if(awakeEndTs===Infinity){ el.textContent='awake · on'; el.classList.remove('dim'); return; }
+  const ms=Math.max(0,awakeEndTs-Date.now()), m=Math.floor(ms/60000), s=Math.floor(ms%60000/1000);
+  el.textContent='awake '+m+':'+String(s).padStart(2,'0'); el.classList.remove('dim');
+}
+/* browsers drop the lock when the tab is hidden — re-acquire on return */
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && show.classList.contains('on') && awakeSel!=='0' && (awakeEndTs===Infinity || Date.now()<awakeEndTs)){ requestWakeLock().then(ok=>{ if(!ok) fallbackWakeStart(); }); } });
 
 /* dock behaviour: auto-hide, tap screen to toggle */
 function revealDock(){ dock.classList.remove('hidden'); clearTimeout(dockHideT); dockHideT=setTimeout(()=>dock.classList.add('hidden'),5000); }
@@ -614,6 +673,7 @@ document.addEventListener('fullscreenchange',()=>{ if(!document.fullscreenElemen
 
 /* init */
 rise(); renderHarmony(); syncValues(current); syncEqLabels();
+buildAwakeChips($('awakeLed')); buildAwakeChips($('awakeAudio')); buildAwakeChips($('awakeDock')); updateAwakeCount();
 </script>
 </body>
 </html>
