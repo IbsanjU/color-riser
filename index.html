@@ -134,6 +134,12 @@
   .stack { display:flex; flex-direction:column; gap:12px; }
 
   .hint { font-size:0.66rem; color: var(--text-faint); text-align:center; margin-top: 6px; }
+  .eq-val { min-width: 38px; text-align:right; font-variant-numeric: tabular-nums; color: var(--text-dim); font-family: ui-monospace, monospace; }
+
+  .footer { margin-top: 34px; padding: 18px 12px 6px; text-align:center; font-size:0.72rem; color: var(--text-faint); letter-spacing:0.04em; }
+  .footer a { color: var(--text-dim); text-decoration:none; font-weight:700; border-bottom:1px solid var(--stroke); padding-bottom:1px; transition: color .2s ease, border-color .2s ease; }
+  .footer a:hover { color: var(--text); border-color: var(--stroke-strong); }
+  .footer .dot { opacity:.4; margin:0 6px; }
 
   .swatches { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
   .sw { width: clamp(52px, 15vw, 66px); height: clamp(52px, 15vw, 66px); border-radius: 14px; cursor:pointer;
@@ -326,11 +332,29 @@
         <div class="slider"><label>Sensitivity</label><input type="range" id="audioSens" min="0.3" max="2.2" value="1" step="0.1"></div>
         <div class="slider"><label>Brightness</label><input type="range" id="audioBright" min="20" max="100" value="100"></div>
       </div>
+    </div>
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+        <h3 style="margin:0;">Frequency balance</h3>
+        <button class="chip" id="eqReset" style="padding:0.3em 0.7em;">Reset</button>
+      </div>
+      <div class="stack">
+        <div class="slider"><label>Bass</label><input type="range" id="gBass" min="0" max="2.5" value="1" step="0.05"><span class="eq-val" id="gBassV">1.0×</span></div>
+        <div class="slider"><label>Mid</label><input type="range" id="gMid" min="0" max="2.5" value="1" step="0.05"><span class="eq-val" id="gMidV">1.0×</span></div>
+        <div class="slider"><label>Treble</label><input type="range" id="gTreble" min="0" max="2.5" value="1" step="0.05"><span class="eq-val" id="gTrebleV">1.0×</span></div>
+      </div>
+      <div class="hint">Boost or cut each range — shapes how the visuals react. Adjustable live during the show too.</div>
       <div class="row" style="margin-top:16px;">
         <button class="btn" id="audioStart" disabled style="opacity:.5;">Start show</button>
       </div>
     </div>
   </section>
+
+  <footer class="footer">
+    Made by <a href="https://revanab.com" target="_blank" rel="noopener noreferrer">Bharath Revana</a>
+    <span class="dot">·</span>
+    <a href="https://revanab.com" target="_blank" rel="noopener noreferrer">revanab.com</a>
+  </footer>
 </main>
 
 <!-- FULLSCREEN SHOW -->
@@ -343,6 +367,11 @@
     <div class="stack">
       <div class="slider"><label id="dockL1">Speed</label><input type="range" id="dockS1"></div>
       <div class="slider"><label id="dockL2">Brightness</label><input type="range" id="dockS2"></div>
+    </div>
+    <div class="stack" id="dockBands" style="display:none;">
+      <div class="slider"><label>Bass</label><input type="range" id="dockBass" min="0" max="2.5" step="0.05"></div>
+      <div class="slider"><label>Mid</label><input type="range" id="dockMid" min="0" max="2.5" step="0.05"></div>
+      <div class="slider"><label>Treble</label><input type="range" id="dockTreble" min="0" max="2.5" step="0.05"></div>
     </div>
   </div>
 </div>
@@ -430,8 +459,16 @@ audioVis.forEach(([id,label],i)=>{const t=document.createElement('div');t.classN
 
 /* ============ FULLSCREEN SHOW ENGINE ============ */
 const show=$('show'), showCanvas=$('showCanvas'), showFill=$('showFill'), showDim=$('showDim');
-const closeBtn=$('closeBtn'), dock=$('dock'), dockChips=$('dockChips');
+const closeBtn=$('closeBtn'), dock=$('dock'), dockChips=$('dockChips'), dockBands=$('dockBands');
 const dockL1=$('dockL1'),dockL2=$('dockL2'),dockS1=$('dockS1'),dockS2=$('dockS2');
+const dockBass=$('dockBass'),dockMid=$('dockMid'),dockTreble=$('dockTreble');
+
+/* ---- EQ / frequency balance ---- */
+function syncEqLabels(){$('gBassV').textContent=(+$('gBass').value).toFixed(1)+'×';$('gMidV').textContent=(+$('gMid').value).toFixed(1)+'×';$('gTrebleV').textContent=(+$('gTreble').value).toFixed(1)+'×';if(dockBands.style.display!=='none'){dockBass.value=$('gBass').value;dockMid.value=$('gMid').value;dockTreble.value=$('gTreble').value;}}
+['gBass','gMid','gTreble'].forEach(id=>$(id).addEventListener('input',syncEqLabels));
+$('eqReset').onclick=()=>{$('gBass').value=1;$('gMid').value=1;$('gTreble').value=1;syncEqLabels();};
+/* gain multiplier for a normalized frequency position (0..1) with soft crossfades */
+function bandGainAt(pos){const gb=+$('gBass').value,gm=+$('gMid').value,gt=+$('gTreble').value,b1=0.12,b2=0.45,xf=0.05,lerp=(a,b,t)=>a+(b-a)*t;if(pos<b1-xf)return gb;if(pos<b1+xf)return lerp(gb,gm,(pos-(b1-xf))/(2*xf));if(pos<b2-xf)return gm;if(pos<b2+xf)return lerp(gm,gt,(pos-(b2-xf))/(2*xf));return gt;}
 const sctx=showCanvas.getContext('2d');
 let showType=null; // 'led' | 'audio'
 let rafId=null, ledTimer=null, hueDrift=0, rotation=0, particles=[];
@@ -468,10 +505,14 @@ function syncDockChips(){
   const list = showType==='led'?ledModes:audioVis;
   const activeId = showType==='led'?ledMode:audioMode;
   list.forEach(([id,label])=>{const c=document.createElement('button');c.className='chip'+(id===activeId?' active':'');c.textContent=label;c.onclick=(ev)=>{ev.stopPropagation();dockChips.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));c.classList.add('active');if(showType==='led'){ledMode=id;ledGrid.querySelectorAll('.vis-tile').forEach((t,i)=>t.classList.toggle('active',ledModes[i][0]===id));startLed();}else{audioMode=id;audioGrid.querySelectorAll('.vis-tile').forEach((t,i)=>t.classList.toggle('active',audioVis[i][0]===id));if(audioMode!=='particles')particles=[];}revealDock();};dockChips.appendChild(c);});
-  if(showType==='led'){dockL1.textContent='Speed';dockS1.min=2;dockS1.max=30;dockS1.value=$('ledSpeed').value;dockL2.textContent='Brightness';dockS2.min=15;dockS2.max=100;dockS2.value=$('ledBright').value;
+  if(showType==='led'){dockBands.style.display='none';dockL1.textContent='Speed';dockS1.min=2;dockS1.max=30;dockS1.value=$('ledSpeed').value;dockL2.textContent='Brightness';dockS2.min=15;dockS2.max=100;dockS2.value=$('ledBright').value;
     dockS1.oninput=()=>{$('ledSpeed').value=dockS1.value;startLed();revealDock();};dockS2.oninput=()=>{$('ledBright').value=dockS2.value;revealDock();};}
-  else{dockL1.textContent='Sensitivity';dockS1.min=0.3;dockS1.max=2.2;dockS1.step=0.1;dockS1.value=$('audioSens').value;dockL2.textContent='Brightness';dockS2.min=20;dockS2.max=100;dockS2.value=$('audioBright').value;
-    dockS1.oninput=()=>{$('audioSens').value=dockS1.value;revealDock();};dockS2.oninput=()=>{$('audioBright').value=dockS2.value;revealDock();};}
+  else{dockBands.style.display='flex';dockL1.textContent='Sensitivity';dockS1.min=0.3;dockS1.max=2.2;dockS1.step=0.1;dockS1.value=$('audioSens').value;dockL2.textContent='Brightness';dockS2.min=20;dockS2.max=100;dockS2.value=$('audioBright').value;
+    dockS1.oninput=()=>{$('audioSens').value=dockS1.value;revealDock();};dockS2.oninput=()=>{$('audioBright').value=dockS2.value;revealDock();};
+    dockBass.value=$('gBass').value;dockMid.value=$('gMid').value;dockTreble.value=$('gTreble').value;
+    dockBass.oninput=()=>{$('gBass').value=dockBass.value;syncEqLabels();revealDock();};
+    dockMid.oninput=()=>{$('gMid').value=dockMid.value;syncEqLabels();revealDock();};
+    dockTreble.oninput=()=>{$('gTreble').value=dockTreble.value;syncEqLabels();revealDock();};}
 }
 
 /* ---- LED show (full color fill) ---- */
@@ -499,7 +540,7 @@ $('micBtn').onclick=async()=>{ensureCtx();try{micStream=await navigator.mediaDev
 $('fileBtn').onclick=()=>$('audioFile').click();
 $('audioFile').onchange=e=>{const f=e.target.files[0];if(!f)return;ensureCtx();const url=URL.createObjectURL(f);audioPlayer.src=url;playerWrap.style.display='block';if(srcNode)try{srcNode.disconnect();}catch(er){}srcNode=actx.createMediaElementSource(audioPlayer);srcNode.connect(analyser);analyser.connect(actx.destination); /* route file to speakers */ audioStatus.textContent=f.name+' loaded · press Start show';enableStart();$('fileBtn').textContent='🎵 File ready';actx.resume();audioPlayer.play().catch(()=>{});};
 
-function bands(){analyser.getByteFrequencyData(freq);const n=freq.length;const avg=(a,b)=>{let s=0;for(let i=a;i<b;i++)s+=freq[i];return s/((b-a)*255);};return{bass:avg(0,Math.floor(n*0.12)),mid:avg(Math.floor(n*0.12),Math.floor(n*0.45)),treble:avg(Math.floor(n*0.45),n)};}
+function bands(){analyser.getByteFrequencyData(freq);const n=freq.length;const avg=(a,b)=>{let s=0;for(let i=a;i<b;i++)s+=freq[i];return s/((b-a)*255);};const gb=+$('gBass').value,gm=+$('gMid').value,gt=+$('gTreble').value;return{bass:Math.min(1,avg(0,Math.floor(n*0.12))*gb),mid:Math.min(1,avg(Math.floor(n*0.12),Math.floor(n*0.45))*gm),treble:Math.min(1,avg(Math.floor(n*0.45),n)*gt)};}
 
 /* ---- audio render loop with selectable visuals ---- */
 function startAudioLoop(){
@@ -519,21 +560,21 @@ function startAudioLoop(){
 
     if(audioMode==='bars'){
       const n=64, bw=w/n;
-      for(let i=0;i<n;i++){const idx=Math.floor(i/n*freq.length*0.7);const v=Math.min(1,freq[idx]/255*sens);const bh=v*h*0.92;const hue=(i/n*300+hueDrift)%360;const g=sctx.createLinearGradient(0,h,0,h-bh);g.addColorStop(0,U.hsl(hue,85,45*bright+10));g.addColorStop(1,U.hsl(hue+30,90,60*bright+12));sctx.fillStyle=g;const x=i*bw;const r=Math.min(bw*0.45,6);sctx.beginPath();sctx.roundRect(x+bw*0.12,h-bh,bw*0.76,bh,[r,r,0,0]);sctx.fill();}
+      for(let i=0;i<n;i++){const idx=Math.floor(i/n*freq.length*0.7);const v=Math.min(1,freq[idx]/255*sens*bandGainAt(idx/freq.length));const bh=v*h*0.92;const hue=(i/n*300+hueDrift)%360;const g=sctx.createLinearGradient(0,h,0,h-bh);g.addColorStop(0,U.hsl(hue,85,45*bright+10));g.addColorStop(1,U.hsl(hue+30,90,60*bright+12));sctx.fillStyle=g;const x=i*bw;const r=Math.min(bw*0.45,6);sctx.beginPath();sctx.roundRect(x+bw*0.12,h-bh,bw*0.76,bh,[r,r,0,0]);sctx.fill();}
     }
     else if(audioMode==='mirror'){
       const n=56, bw=w/n, mid=h/2;
-      for(let i=0;i<n;i++){const idx=Math.floor(i/n*freq.length*0.7);const v=Math.min(1,freq[idx]/255*sens);const bh=v*h*0.46;const hue=(i/n*300+hueDrift)%360;sctx.fillStyle=U.hsl(hue,85,L(v)); const x=i*bw+bw*0.15,bwR=bw*0.7,r=Math.min(bwR*0.5,5);sctx.beginPath();sctx.roundRect(x,mid-bh,bwR,bh,r);sctx.fill();sctx.globalAlpha=0.75;sctx.beginPath();sctx.roundRect(x,mid,bwR,bh,r);sctx.fill();sctx.globalAlpha=1;}
+      for(let i=0;i<n;i++){const idx=Math.floor(i/n*freq.length*0.7);const v=Math.min(1,freq[idx]/255*sens*bandGainAt(idx/freq.length));const bh=v*h*0.46;const hue=(i/n*300+hueDrift)%360;sctx.fillStyle=U.hsl(hue,85,L(v)); const x=i*bw+bw*0.15,bwR=bw*0.7,r=Math.min(bwR*0.5,5);sctx.beginPath();sctx.roundRect(x,mid-bh,bwR,bh,r);sctx.fill();sctx.globalAlpha=0.75;sctx.beginPath();sctx.roundRect(x,mid,bwR,bh,r);sctx.fill();sctx.globalAlpha=1;}
     }
     else if(audioMode==='wave'){
-      sctx.lineWidth=3; sctx.shadowBlur=18; const hue=(hueDrift+b.bass*120)%360; sctx.shadowColor=U.hsl(hue,90,55);
-      for(let pass=0;pass<2;pass++){sctx.strokeStyle=U.hsl(hue+pass*40,85,60*bright+15);sctx.globalAlpha=pass?0.5:1;sctx.beginPath();for(let i=0;i<timeDom.length;i++){const x=i/timeDom.length*w;const amp=(timeDom[i]/128-1)*(1+sens*0.6);const y=h/2+amp*h*0.34*(pass?-1:1);i===0?sctx.moveTo(x,y):sctx.lineTo(x,y);}sctx.stroke();}
+      sctx.lineWidth=3; sctx.shadowBlur=18; const hue=(hueDrift+b.bass*120)%360; sctx.shadowColor=U.hsl(hue,90,55); const gAvg=(+$('gBass').value + +$('gMid').value + +$('gTreble').value)/3;
+      for(let pass=0;pass<2;pass++){sctx.strokeStyle=U.hsl(hue+pass*40,85,60*bright+15);sctx.globalAlpha=pass?0.5:1;sctx.beginPath();for(let i=0;i<timeDom.length;i++){const x=i/timeDom.length*w;const amp=(timeDom[i]/128-1)*(1+sens*0.6)*gAvg;const y=h/2+amp*h*0.34*(pass?-1:1);i===0?sctx.moveTo(x,y):sctx.lineTo(x,y);}sctx.stroke();}
       sctx.globalAlpha=1; sctx.shadowBlur=0;
     }
     else if(audioMode==='radial'){
       const cx=w/2,cy=h/2,n=72,r0=Math.min(w,h)*0.13; rotation+=0.004;
       sctx.save();sctx.translate(cx,cy);sctx.rotate(rotation);sctx.lineCap='round';
-      for(let i=0;i<n;i++){const idx=Math.floor(i/n*freq.length*0.7);const v=Math.min(1,freq[idx]/255*sens);const len=v*Math.min(w,h)*0.34;const a=i/n*Math.PI*2;const hue=(i/n*360+hueDrift)%360;sctx.strokeStyle=U.hsl(hue,88,55*bright+12);sctx.lineWidth=Math.max(2,(Math.PI*2*r0/n)*0.7);sctx.beginPath();sctx.moveTo(Math.cos(a)*r0,Math.sin(a)*r0);sctx.lineTo(Math.cos(a)*(r0+len),Math.sin(a)*(r0+len));sctx.stroke();}
+      for(let i=0;i<n;i++){const idx=Math.floor(i/n*freq.length*0.7);const v=Math.min(1,freq[idx]/255*sens*bandGainAt(idx/freq.length));const len=v*Math.min(w,h)*0.34;const a=i/n*Math.PI*2;const hue=(i/n*360+hueDrift)%360;sctx.strokeStyle=U.hsl(hue,88,55*bright+12);sctx.lineWidth=Math.max(2,(Math.PI*2*r0/n)*0.7);sctx.beginPath();sctx.moveTo(Math.cos(a)*r0,Math.sin(a)*r0);sctx.lineTo(Math.cos(a)*(r0+len),Math.sin(a)*(r0+len));sctx.stroke();}
       sctx.beginPath();sctx.arc(0,0,r0*(0.7+b.bass*0.5),0,7);sctx.fillStyle=U.hsl(hueDrift,80,45*bright+10);sctx.globalAlpha=0.55;sctx.fill();sctx.globalAlpha=1;sctx.restore();
     }
     else if(audioMode==='particles'){
@@ -572,7 +613,7 @@ document.addEventListener('keydown',e=>{
 document.addEventListener('fullscreenchange',()=>{ if(!document.fullscreenElement && show.classList.contains('on')){ /* stay in show even if user exits FS */ } });
 
 /* init */
-rise(); renderHarmony(); syncValues(current);
+rise(); renderHarmony(); syncValues(current); syncEqLabels();
 </script>
 </body>
 </html>
